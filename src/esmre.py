@@ -3,6 +3,7 @@
 
 # esmre.py - clue-indexed regular expressions module
 # Copyright (C) 2007-2008 Tideway Systems Limited.
+# Copyright (C) 2021-2024 BMC Software.
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -22,16 +23,57 @@
 import esm
 import threading
 
-
-class InBackslashState(object):
+class InBackslashState:
     def __init__(self, parent_state):
         self.parent_state = parent_state
 
     def process_byte(self, ch):
+        if not ch.isalnum():
+            try:
+                self.parent_state.append_to_current_hint(ch)
+            except AttributeError:
+                # Parent does not have append_to_current_hint
+                pass
+
+            return self.parent_state
+
+        if ch.isdigit():
+            return InBackslashNumberState(self.parent_state)
+
+        if ch == "N":
+            return InNamedUnicodeState(self.parent_state)
+
+        try:
+            self.parent_state.bank_current_hint_with_last_byte()
+        except AttributeError:
+            pass
+
         return self.parent_state
 
 
-class InClassState(object):
+class InBackslashNumberState:
+    def __init__(self, parent_state):
+        self.parent_state = parent_state
+
+    def process_byte(self, ch):
+        if not ch.isdigit():
+            return self.parent_state
+
+        return self
+
+
+class InNamedUnicodeState:
+    def __init__(self, parent_state):
+        self.parent_state = parent_state
+
+    def process_byte(self, ch):
+        if ch == "{":
+            return InBracesState(self.parent_state)
+
+        return self.parent_state
+
+
+class InClassState:
     def __init__(self, parent_state):
         self.parent_state = parent_state
 
@@ -46,7 +88,7 @@ class InClassState(object):
             return self
 
 
-class InBracesState(object):
+class InBracesState:
     def __init__(self, parent_state):
         self.parent_state = parent_state
 
@@ -58,9 +100,12 @@ class InBracesState(object):
             return self
 
 
-class CollectingState(object):
+class CollectingState:
     def __init__(self):
         self.hints = [""]
+
+    def finish(self):
+        pass
 
     def process_byte(self, ch):
         self.update_hints(ch)
@@ -77,9 +122,6 @@ class CollectingState(object):
 
         self.hints.append("")
 
-    def forget_all_hints(self):
-        self.hints = [""]
-
     def append_to_current_hint(self, ch):
         self.hints[-1] += ch
 
@@ -87,11 +129,11 @@ class CollectingState(object):
         if ch in "?*{":
             self.bank_current_hint_and_forget_last_byte()
 
-        elif ch in "+.^$([\\":
+        elif ch in "+.^$([":
             self.bank_current_hint_with_last_byte()
 
-        elif ch == "|":
-            self.forget_all_hints()
+        elif ch in "|\\":
+            pass
 
         else:
             self.append_to_current_hint(ch)
@@ -120,11 +162,21 @@ class CollectingState(object):
 
 
 class RootState(CollectingState):
+    def __init__(self):
+        CollectingState.__init__(self)
+        self.alternate_hints = []
+
+    def finish(self):
+        self.alternate_hints.append(self.hints)
+        self.hints = [""]
+
     def alternation_state(self):
-        raise StopIteration
+        self.alternate_hints.append(self.hints)
+        self.hints = [""]
+        return self
 
 
-class StartOfGroupState(object):
+class StartOfGroupState:
     def __init__(self, parent_state):
         self.parent_state = parent_state
 
@@ -162,18 +214,22 @@ class InGroupState(CollectingState):
         return self
 
 
-class StartOfExtensionGroupState(object):
+class StartOfExtensionGroupState:
     def __init__(self, parent_state):
         self.parent_state = parent_state
 
     def process_byte(self, ch):
         if ch == "P":
             return MaybeStartOfNamedGroupState(self.parent_state)
+
+        elif ch == ":":
+            return InGroupState(self.parent_state)
+
         else:
             return IgnoredGroupState(self.parent_state).process_byte(ch)
 
 
-class MaybeStartOfNamedGroupState(object):
+class MaybeStartOfNamedGroupState:
     def __init__(self, parent_state):
         self.parent_state = parent_state
 
@@ -184,7 +240,7 @@ class MaybeStartOfNamedGroupState(object):
             return IgnoredGroupState(self.parent_state)
 
 
-class InNamedGroupNameState(object):
+class InNamedGroupNameState:
     def __init__(self, parent_state):
         self.parent_state = parent_state
 
@@ -207,39 +263,39 @@ def hints(regex):
         for ch in regex:
             state = state.process_byte(ch)
 
+        state.finish()
+
     except StopIteration:
         pass
 
-    def flattened(hints):
-        for item in hints:
+    all_hints = state.alternate_hints
+
+    def flattened(l):
+        for item in l:
             if isinstance(item, list):
                 for i in flattened(item):
                     yield i
             else:
                 yield item
 
-    return [hint for hint in flattened(state.hints) if hint]
+    def best(hints):
+        return max((hint for hint in flattened(hints)), key=len)
+
+    result = {best(hints).lower() for hints in all_hints}
+
+    if all(result):
+        return result
+
+    return set()
 
 
-def shortlist(hints):
-    if not hints:
-        return []
-
-    best = ""
-
-    for hint in hints:
-        if len(hint) > len(best):
-            best = hint
-
-    return [best]
-
-
-class Index(object):
+class Index:
     def __init__(self):
         self.esm = esm.Index()
         self.hintless_objects = list()
         self.fixed = False
         self.lock = threading.Lock()
+
 
     def enter(self, regex, obj):
         self.lock.acquire()
@@ -248,16 +304,17 @@ class Index(object):
             if self.fixed:
                 raise TypeError("enter() cannot be called after query()")
 
-            keywords = shortlist(hints(regex))
+            keywords = hints(regex)
 
             if not keywords:
                 self.hintless_objects.append(obj)
 
-            for hint in shortlist(hints(regex)):
-                self.esm.enter(hint.lower(), obj)
+            for hint in keywords:
+                self.esm.enter(hint, obj)
 
         finally:
             self.lock.release()
+
 
     def query(self, string):
         self.lock.acquire()
@@ -270,6 +327,5 @@ class Index(object):
         finally:
             self.lock.release()
 
-        return self.hintless_objects + [
-            obj for (_, obj) in self.esm.query(string.lower())
-        ]
+        return self.hintless_objects + \
+            [obj for (_, obj) in self.esm.query(string.lower())]

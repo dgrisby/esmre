@@ -3,6 +3,7 @@
 
 # esmre_tests.py - tests for esmre module
 # Copyright (C) 2007-2008 Tideway Systems Limited.
+# Copyright (C) 2021-2024 BMC Software.
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -22,136 +23,140 @@
 import unittest
 import esmre
 
-
 class HintExtractionTests(unittest.TestCase):
     def checkHints(self, expected_hints, regex):
-        self.assertEqual(set(expected_hints), set(esmre.hints(regex)))
+        self.assertEqual(expected_hints, esmre.hints(regex))
 
     def testSimpleString(self):
-        self.checkHints(["yarr"], r"yarr")
+        self.checkHints({"yarr"}, r"yarr")
 
     def testSkipsOptionalCharacter(self):
-        self.checkHints(["dubloon"], r"dubloons?")
+        self.checkHints({"dubloon"}, r"dubloons?")
 
     def testStartsNewStringAfterOptionalCharacter(self):
-        self.checkHints(["ship", "shape"], r"ship ?shape")
+        self.checkHints({"shape"}, r"ship ?shape")
 
     def testSkipsOptionalRepeatedCharacter(self):
-        self.checkHints(["bristol", "fasion"], r"bristol *fasion")
+        self.checkHints({"bristol"}, r"bristol *fasion")
 
     def testIncludesRepeatedCharacterButStartsNewHint(self):
-        self.checkHints(["ava", "st me harties"], r"ava+st me harties")
+        self.checkHints({"st me harties"},
+                         r"ava+st me harties")
 
     def testSkipsGroupsWithAlternation(self):
-        self.checkHints(
-            ["Hoist the ", ", ye ", "!"],
-            r"Hoist the (mizzen mast|main brace), "
-            r"ye (landlubbers|scurvy dogs)!",
-        )
+        self.checkHints({"hoist the "},
+             r"Hoist the (mizzen mast|main brace), "
+                       r"ye (landlubbers|scurvy dogs)!")
 
     def testSkipsAny(self):
-        self.checkHints(
-            ["After 10 paces, ", " marks the spot"],
-            r"After 10 paces, . marks the spot",
-        )
+        self.checkHints({"after 10 paces, "},
+                         r"After 10 paces, . marks the spot")
 
     def testSkipsOneOrMoreAny(self):
-        self.checkHints(["Hard to ", "!"], r"Hard to .+!")
+        self.checkHints({"hard to "},
+                         r"Hard to .+!")
 
     def testSkipsNestedGroups(self):
-        self.checkHints(
-            ["Squark!", " Pieces of ", "!"], r"Squark!( Pieces of (.+)!)"
-        )
+        self.checkHints({" pieces of "},
+                         r"Squark!( Pieces of (.+)!)")
 
     def testSkipsCharacterClass(self):
-        self.checkHints(["r"], r"[ya]a*r+")
+        self.checkHints({"r"},
+                         r"[ya]a*r+")
 
     def testRightBracketDoesNotCloseGroupIfInClass(self):
-        self.checkHints([":=", "X"], r":=([)D])X")
+        self.checkHints({":="},
+                         r":=([)D])X")
 
     def testSkipsBackslashMetacharacters(self):
-        self.checkHints(["Cap'n", " ", " Beard"], r"Cap'n\b ([\S] Beard)")
+        self.checkHints({" beard"},
+                         r"Cap'n\b ([\S] Beard)")
 
     def testBackslashBracketDoesNotCloseGroup(self):
-        self.checkHints([":=", "X"], r":=(\)|D)X")
+        self.checkHints({":="},
+                         r":=(\)|D)X")
 
     def testBackslashSquareBracketDoesNotCloseClass(self):
-        self.checkHints([":=", "X"], r":=[)D\]]X")
+        self.checkHints({":="},
+                         r":=[)D\]]X")
 
     def testSkipsMetacharactersAfterGroups(self):
-        self.checkHints(
-            ["Yo ", "ho ", " and a bottle of rum"],
-            r"Yo (ho )+ and a bottle of rum",
-        )
+        self.checkHints({" and a bottle of rum"},
+                        r"Yo (ho )+ and a bottle of rum")
 
     def testSkipsRepetionBraces(self):
-        self.checkHints(["A", ", me harties"], r"Ar{2-10}, me harties")
+        self.checkHints({", me harties"},
+                        r"Ar{2-10}, me harties")
 
-    def testAlternationCausesEmptyResult(self):
-        self.checkHints([], r"rum|grog")
+    def testAlternation(self):
+        self.checkHints({"rum", "grog"}, r"rum|grog")
 
     def testSkipMatchBeginning(self):
-        self.checkHints(["The black perl"], r"^The black perl")
+        self.checkHints({"the black perl"}, r"^The black perl")
 
     def testSkipMatchEnd(self):
-        self.checkHints(["Davey Jones' Locker"], r"Davey Jones' Locker$")
+        self.checkHints({"davey jones' locker"}, r"Davey Jones' Locker$")
 
     def testOnlyGroupGivesEmptyResult(self):
-        self.checkHints([], r"(rum|grog)")
+        self.checkHints(set(), r"(rum|grog)")
 
     def testGetsHintsFromGroups(self):
-        self.checkHints(["/"], r"([0-3][0-9]/[0-1][0-9]/[1-2][0-9]{3})")
+        self.checkHints({"/"}, r"([0-3][0-9]/[0-1][0-9]/[1-2][0-9]{3})")
 
     def testSkipsOptionalGroups(self):
-        self.checkHints(["Shiver me timbers!"], r"Shiver me timbers!( Arrr!)?")
+        self.checkHints({"shiver me timbers!"},
+                        r"Shiver me timbers!( Arrr!)?")
 
     def testSkipsMostExtensionGroups(self):
         for regex in [
-            # set flag
-            r"(?i)(?L)(?m)(?s)(?u)(?x)",
-            # non-grouping paren
-            r"(?:foo)",
-            # previous named group
-            r"(?P=foo)",
-            # comment
-            r"(?#foo)",
-            # lookahead
-            r"(?=foo)",
-            # negative lookahead
-            r"(?!foo)",
-            # lookbehind
-            r"(?<=foo)",
-            # negative lookbehind
-            r"(?<!foo)",
-            # conditional match
-            r"(?(1)foo|bar)",
-        ]:
+                # set flag
+                r"(?i)(?L)(?m)(?s)(?u)(?x)",
 
-            self.checkHints([], regex)
+                # previous named group
+                r"(?P=foo)",
+
+                # comment
+                r"(?#foo)",
+
+                # lookahead
+                r"(?=foo)",
+
+                # negative lookahead
+                r"(?!foo)",
+
+                # lookbehind
+                r"(?<=foo)",
+
+                # negative lookbehind
+                r"(?<!foo)",
+
+                # conditional match
+                r"(?(1)foo|bar)"]:
+
+            self.checkHints(set(), regex)
+
 
     def testGetsHintsFromNamedGroup(self):
         self.checkHints(
-            ["/"], r"(?P<date>[0-3][0-9]/[0-1][0-9]/[1-2][0-9]{3})"
-        )
+            {"/"}, r"(?P<date>[0-3][0-9]/[0-1][0-9]/[1-2][0-9]{3})")
 
+    def testNonGrouping(self):
+        self.checkHints({"foo"}, r"(?:foo)")
 
-class ShortlistTests(unittest.TestCase):
-    def checkShortlist(self, expected_shortlist, hints):
-        self.assertEqual(expected_shortlist, esmre.shortlist(hints))
+    def testEscapedSlash(self):
+        self.checkHints({r"foo\bar"}, r"foo\\bar")
 
-    def testShortlistIsEmptyForEmptyCandidates(self):
-        self.checkShortlist([], [])
+    def testEscapedDot(self):
+        self.checkHints({r"foo.bar"}, r"foo\.bar")
 
-    def testShortlistIsOnlyCandidate(self):
-        self.checkShortlist(["Blue Beard"], ["Blue Beard"])
+    def testOptionalGroupAfter(self):
+        self.checkHints({"short"}, r"short(longer)?")
 
-    def testShorlistSelectsLongestCandidate(self):
-        self.checkShortlist(["Black Beard"], ["Black Beard", "Blue Beard"])
+    def testOptionalGroupBefore(self):
+        self.checkHints({"short"}, r"(longer)?short")
 
-    def testShorlistSelectsLongestCandidateAtEnd(self):
-        self.checkShortlist(
-            ["Yellow Beard"], ["Black Beard", "Blue Beard", "Yellow Beard"]
-        )
+    def testOptionalGroupMiddle(self):
+        self.checkHints({"short"}, r"tiny(longer)?short")
 
 
 class IndexTests(unittest.TestCase):
@@ -161,25 +166,20 @@ class IndexTests(unittest.TestCase):
         self.index.enter(r"\bway\W+haye?\b", "sea shanty")
 
     def testSingleQuery(self):
-        self.assertEqual(
-            ["savoy opera"],
-            self.index.query("I am the very model of a modern Major-General."),
-        )
+        self.assertEqual(["savoy opera"], self.index.query(
+            "I am the very model of a modern Major-General."))
 
     def testCannotEnterAfterQuery(self):
         self.index.query("blah")
         self.assertRaises(TypeError, self.index.enter, "foo", "bar")
 
     def testCaseInsensitive(self):
-        self.assertEqual(
-            ["sea shanty"], self.index.query("Way, hay up she rises,")
-        )
-        self.assertEqual(
-            ["sea shanty"],
-            self.index.query("To my way haye, blow the man down,"),
-        )
+        self.assertEqual(["sea shanty"], self.index.query(
+            "Way, hay up she rises,"))
+        self.assertEqual(["sea shanty"], self.index.query(
+            "To my way haye, blow the man down,"))
 
-    def testAlwaysReportsOpjectForHintlessExpressions(self):
+    def testAlwaysReportsObjectForHintlessExpressions(self):
         self.index.enter(r"(\d+\s)*(paces|yards)", "distance")
         self.assertTrue("distance" in self.index.query("'til morning"))
 
